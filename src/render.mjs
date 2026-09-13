@@ -4,11 +4,16 @@
  * Word's engine, not a browser, and anything fancier than that silently
  * breaks there. Every color is inline for the same reason.
  *
- * Structure is themes-first, articles-second: a short synthesis of what's
- * trending, grouped by minerals / friction / both, then the underlying
- * stories as a plain reference list. No numeric score is shown anywhere —
- * the rubric still decides what qualifies and how items are ordered within
- * a theme, but that's a filter, not something a reader needs displayed.
+ * Structure: an outlook paragraph and theme headlines up top, then a
+ * magazine-style card per top story (image, headline, analyst blurb, link),
+ * then the remaining qualifying items as a compact "also today" list. No
+ * numeric score is shown anywhere — the rubric still decides what qualifies
+ * and how everything is ordered, but that's a filter, not something a
+ * reader needs displayed.
+ *
+ * `analysis` (from analysis.mjs) is optional and can be null — every place
+ * it's used has a rule-based fallback, because a missing ANTHROPIC_API_KEY
+ * must never mean a missing digest.
  */
 import { MINERAL_KEYWORDS, FRICTION_KEYWORDS } from "./rubric.mjs";
 
@@ -18,6 +23,7 @@ const CANVAS = "#f4f1ea";
 const MUTED = "#6b7280";
 const RULE = "#e5e7eb";
 const AMBER = "#d97706";
+const SPOTLIGHT_COUNT = 4;
 
 const TAG_STYLE = {
   minerals: { bg: "#fef3c7", fg: "#92400e", label: "🪨 Minerals" },
@@ -38,6 +44,14 @@ function tagFor(tags) {
 
 function byline(item) {
   return item.publisher ?? item.sourceName;
+}
+
+function hostnameOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
 }
 
 const ACRONYMS = new Set(["cfius", "cbam"]);
@@ -64,48 +78,68 @@ function trendingTerms(group, keywords) {
     .map(([kw]) => titleCase(kw));
 }
 
-function renderTheme(group, { label, icon, bg, fg, keywordPool }) {
+function themeGroups(ranked) {
+  return {
+    both: ranked.filter((r) => r.scored.tags.includes("minerals") && r.scored.tags.includes("friction")),
+    minerals: ranked.filter((r) => r.scored.tags.includes("minerals") && !r.scored.tags.includes("friction")),
+    friction: ranked.filter((r) => r.scored.tags.includes("friction") && !r.scored.tags.includes("minerals")),
+  };
+}
+
+const THEME_META = {
+  both: { label: "Where they overlap", icon: "🪨⚖️", ...TAG_STYLE.both, keywordPool: [...MINERAL_KEYWORDS, ...FRICTION_KEYWORDS] },
+  minerals: { label: "Minerals", icon: "🪨", ...TAG_STYLE.minerals, keywordPool: MINERAL_KEYWORDS },
+  friction: { label: "Friction", icon: "⚖️", ...TAG_STYLE.friction, keywordPool: FRICTION_KEYWORDS },
+};
+
+/** A one-line headline per non-empty theme: the LLM's when analysis ran, a trending-keyword summary otherwise. */
+function themeLine(key, group, analysis) {
   if (group.length === 0) return "";
-  const terms = trendingTerms(group, keywordPool);
-  const top = group[0].item;
-  const count = group.length;
+  const meta = THEME_META[key];
+  const llmHeadline = analysis?.themeHeadlines?.[key]?.trim();
+  const fallback = (() => {
+    const terms = trendingTerms(group, meta.keywordPool);
+    return `${group.length} ${group.length === 1 ? "story" : "stories"}${terms.length ? ` — trending: ${escapeHtml(terms.join(", "))}` : ""}`;
+  })();
 
   return `
-  <div style="margin-bottom:18px">
-    <span style="display:inline-block;background:${bg};color:${fg};font:bold 12px -apple-system,Helvetica,Arial,sans-serif;padding:4px 10px;border-radius:10px;letter-spacing:.02em">${icon} ${label}</span>
-    <div style="font:15px/1.55 -apple-system,Helvetica,Arial,sans-serif;color:${INK};margin-top:8px">
-      ${count} ${count === 1 ? "story" : "stories"} today${terms.length ? ` — trending: ${escapeHtml(terms.join(", "))}` : ""}.
-      Led by <a href="${escapeHtml(top.link)}" style="color:${AMBER};font-weight:bold;text-decoration:none">${escapeHtml(top.title)}</a>.
-    </div>
+  <div style="margin-bottom:10px">
+    <span style="display:inline-block;background:${meta.bg};color:${meta.fg};font:bold 11px -apple-system,Helvetica,Arial,sans-serif;padding:3px 9px;border-radius:10px;letter-spacing:.02em">${meta.icon} ${meta.label}</span>
+    <span style="font:14px -apple-system,Helvetica,Arial,sans-serif;color:${INK};margin-left:8px">${llmHeadline ? escapeHtml(llmHeadline) : fallback}</span>
   </div>`;
 }
 
-function renderThemes(ranked) {
-  const both = ranked.filter((r) => r.scored.tags.includes("minerals") && r.scored.tags.includes("friction"));
-  const mineralsOnly = ranked.filter((r) => r.scored.tags.includes("minerals") && !r.scored.tags.includes("friction"));
-  const frictionOnly = ranked.filter((r) => r.scored.tags.includes("friction") && !r.scored.tags.includes("minerals"));
-
-  return [
-    renderTheme(both, { label: "Where they overlap", icon: "🪨⚖️", bg: TAG_STYLE.both.bg, fg: TAG_STYLE.both.fg, keywordPool: [...MINERAL_KEYWORDS, ...FRICTION_KEYWORDS] }),
-    renderTheme(mineralsOnly, { label: "Minerals", icon: "🪨", bg: TAG_STYLE.minerals.bg, fg: TAG_STYLE.minerals.fg, keywordPool: MINERAL_KEYWORDS }),
-    renderTheme(frictionOnly, { label: "Friction", icon: "⚖️", bg: TAG_STYLE.friction.bg, fg: TAG_STYLE.friction.fg, keywordPool: FRICTION_KEYWORDS }),
-  ].join("");
-}
-
-function renderArticleRow({ item, scored }) {
+function renderSpotlightCard({ item, scored }, index, analysis) {
   const tag = tagFor(scored.tags);
-  const summary = (item.summary ?? "").slice(0, 180);
+  const blurb = analysis?.storyBlurbs?.[String(index)]?.trim() || (item.summary ?? "").slice(0, 320);
+  const image = item.image
+    ? `<img src="${escapeHtml(item.image)}" alt="" width="552" style="width:100%;max-width:552px;border-radius:8px;display:block;margin:10px 0 4px" />
+       <div style="font:italic 11px -apple-system,Helvetica,Arial,sans-serif;color:#9ca3af;margin-bottom:8px">Image via ${escapeHtml(hostnameOf(item.link))}</div>`
+    : "";
 
   return `
-  <tr>
-    <td style="padding:14px 16px;border-top:1px solid ${RULE}">
-      <span style="display:inline-block;background:${tag.bg};color:${tag.fg};font:bold 10px -apple-system,Helvetica,Arial,sans-serif;padding:2px 7px;border-radius:8px">${tag.label}</span>
-      <div style="font:bold 15px/1.4 Georgia,'Times New Roman',serif;color:${INK};margin:6px 0 2px">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:22px">
+    <tr><td style="padding:18px;border:1px solid ${RULE};border-radius:10px">
+      <span style="display:inline-block;background:${tag.bg};color:${tag.fg};font:bold 11px -apple-system,Helvetica,Arial,sans-serif;padding:3px 9px;border-radius:10px;letter-spacing:.02em">${tag.label}</span>
+      <div style="font:bold 19px/1.35 Georgia,'Times New Roman',serif;color:${INK};margin:10px 0 2px">
         <a href="${escapeHtml(item.link)}" style="color:${INK};text-decoration:none">${escapeHtml(item.title)}</a>
       </div>
-      <div style="font:12px -apple-system,Helvetica,Arial,sans-serif;color:${MUTED};margin-bottom:4px">${escapeHtml(byline(item))}</div>
-      ${summary ? `<div style="font:13px/1.5 -apple-system,Helvetica,Arial,sans-serif;color:#374151">${escapeHtml(summary)}${item.summary?.length > 180 ? "…" : ""}</div>` : ""}
+      <div style="font:12px -apple-system,Helvetica,Arial,sans-serif;color:${MUTED};margin-bottom:2px">${escapeHtml(byline(item))}</div>
+      ${image}
+      <div style="font:14px/1.6 -apple-system,Helvetica,Arial,sans-serif;color:#374151;margin:8px 0 10px">${escapeHtml(blurb)}</div>
       <a href="${escapeHtml(item.link)}" style="font:bold 12px -apple-system,Helvetica,Arial,sans-serif;color:${AMBER};text-decoration:none">Read the full story →</a>
+    </td></tr>
+  </table>`;
+}
+
+function renderAlsoTodayRow({ item, scored }) {
+  const tag = tagFor(scored.tags);
+  return `
+  <tr>
+    <td style="padding:10px 16px;border-top:1px solid ${RULE};font:13px -apple-system,Helvetica,Arial,sans-serif">
+      <span style="display:inline-block;background:${tag.bg};color:${tag.fg};font:bold 9px;padding:2px 6px;border-radius:7px;margin-right:6px">${tag.label}</span>
+      <a href="${escapeHtml(item.link)}" style="color:${INK};font-weight:bold;text-decoration:none">${escapeHtml(item.title)}</a>
+      <span style="color:${MUTED}"> — ${escapeHtml(byline(item))}</span>
     </td>
   </tr>`;
 }
@@ -118,13 +152,20 @@ function healthPill(h) {
   return `<span style="display:inline-block;background:${bg};color:${fg};font:11px -apple-system,Helvetica,Arial,sans-serif;padding:3px 8px;border-radius:10px;margin:2px 4px 2px 0">${ok ? "✓" : "✗"} ${label}</span>`;
 }
 
-export function buildDigestHtml({ dateLabel, ranked, health }) {
-  const themes = ranked.length > 0 ? renderThemes(ranked) : "";
-  const articles = ranked.length > 0 ? ranked.map(renderArticleRow).join("") : "";
-  const openingLine =
-    ranked.length > 0
+export function buildDigestHtml({ dateLabel, ranked, health, analysis = null }) {
+  const groups = themeGroups(ranked);
+  const themeLines = ["both", "minerals", "friction"].map((key) => themeLine(key, groups[key], analysis)).join("");
+
+  const outlook =
+    analysis?.outlook?.trim() ||
+    (ranked.length > 0
       ? `${ranked.length} ${ranked.length === 1 ? "development" : "developments"} made the cut today.`
-      : "Nothing cleared the bar today — a quiet day on the beat.";
+      : "Nothing cleared the bar today — a quiet day on the beat.");
+
+  const spotlight = ranked.slice(0, SPOTLIGHT_COUNT);
+  const rest = ranked.slice(SPOTLIGHT_COUNT);
+  const spotlightHtml = spotlight.map((entry, i) => renderSpotlightCard(entry, i, analysis)).join("");
+  const restHtml = rest.length > 0 ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rest.map(renderAlsoTodayRow).join("")}</table>` : "";
 
   return `<!doctype html>
 <html>
@@ -139,23 +180,18 @@ export function buildDigestHtml({ dateLabel, ranked, health }) {
             </td>
           </tr>
           <tr>
-            <td style="padding:20px 24px 4px;font:15px/1.5 -apple-system,Helvetica,Arial,sans-serif;color:${INK}">
-              ${openingLine}
+            <td style="padding:22px 24px 8px">
+              <div style="font:bold 11px -apple-system,Helvetica,Arial,sans-serif;color:${MUTED};text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Where this is heading</div>
+              <div style="font:15px/1.6 -apple-system,Helvetica,Arial,sans-serif;color:${INK};margin-bottom:16px">${escapeHtml(outlook)}</div>
+              ${themeLines}
             </td>
           </tr>
+          ${spotlightHtml ? `<tr><td style="padding:8px 24px 0">${spotlightHtml}</td></tr>` : ""}
           ${
-            themes
-              ? `<tr><td style="padding:14px 24px 0">
-                   <div style="font:bold 11px -apple-system,Helvetica,Arial,sans-serif;color:${MUTED};text-transform:uppercase;letter-spacing:.04em;margin-bottom:12px">Key themes</div>
-                   ${themes}
-                 </td></tr>`
-              : ""
-          }
-          ${
-            articles
-              ? `<tr><td style="padding:8px 8px 0">
-                   <div style="font:bold 11px -apple-system,Helvetica,Arial,sans-serif;color:${MUTED};text-transform:uppercase;letter-spacing:.04em;margin:8px 16px 0">Today's articles</div>
-                   <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${articles}</table>
+            restHtml
+              ? `<tr><td style="padding:0 8px 0">
+                   <div style="font:bold 11px -apple-system,Helvetica,Arial,sans-serif;color:${MUTED};text-transform:uppercase;letter-spacing:.04em;margin:8px 16px 0">Also today</div>
+                   ${restHtml}
                  </td></tr>`
               : ""
           }
@@ -163,7 +199,7 @@ export function buildDigestHtml({ dateLabel, ranked, health }) {
             <td style="padding:16px 24px 24px;border-top:1px solid ${RULE}">
               <div style="font:bold 11px -apple-system,Helvetica,Arial,sans-serif;color:${MUTED};text-transform:uppercase;letter-spacing:.04em;margin:8px 0 8px">Source health</div>
               <div>${health.map(healthPill).join("")}</div>
-              <div style="font:11px -apple-system,Helvetica,Arial,sans-serif;color:#9ca3af;margin-top:12px">Ranked by mineral relevance, friction relevance, source authority, recency and magnitude. Full rubric in the repo README.</div>
+              <div style="font:11px -apple-system,Helvetica,Arial,sans-serif;color:#9ca3af;margin-top:12px">Ranked by mineral relevance, friction relevance, source authority, recency and magnitude. Full rubric in the repo README.${analysis ? "" : " Analysis below is rule-based (no ANTHROPIC_API_KEY set)."}</div>
             </td>
           </tr>
         </table>
@@ -173,37 +209,37 @@ export function buildDigestHtml({ dateLabel, ranked, health }) {
 </html>`;
 }
 
-export function buildDigestText({ dateLabel, ranked, health }) {
+export function buildDigestText({ dateLabel, ranked, health, analysis = null }) {
   const lines = [`THE FRICTION LINE — ${dateLabel}`, ""];
 
   if (ranked.length === 0) {
     lines.push("No developments crossed the threshold today.");
   } else {
-    lines.push(`${ranked.length} development(s) made the cut today.`, "");
+    const outlook = analysis?.outlook?.trim() || `${ranked.length} development(s) made the cut today.`;
+    lines.push("WHERE THIS IS HEADING", outlook, "");
 
-    const both = ranked.filter((r) => r.scored.tags.includes("minerals") && r.scored.tags.includes("friction"));
-    const mineralsOnly = ranked.filter((r) => r.scored.tags.includes("minerals") && !r.scored.tags.includes("friction"));
-    const frictionOnly = ranked.filter((r) => r.scored.tags.includes("friction") && !r.scored.tags.includes("minerals"));
-
+    const groups = themeGroups(ranked);
     lines.push("KEY THEMES");
-    for (const [label, group, keywords] of [
-      ["Where they overlap", both, [...MINERAL_KEYWORDS, ...FRICTION_KEYWORDS]],
-      ["Minerals", mineralsOnly, MINERAL_KEYWORDS],
-      ["Friction", frictionOnly, FRICTION_KEYWORDS],
-    ]) {
+    for (const key of ["both", "minerals", "friction"]) {
+      const group = groups[key];
       if (group.length === 0) continue;
-      const terms = trendingTerms(group, keywords);
-      lines.push(
-        `- ${label}: ${group.length} stor${group.length === 1 ? "y" : "ies"}${terms.length ? ` (trending: ${terms.join(", ")})` : ""} — led by "${group[0].item.title}"`,
-      );
+      const meta = THEME_META[key];
+      const headline = analysis?.themeHeadlines?.[key]?.trim() || trendingTerms(group, meta.keywordPool).join(", ");
+      lines.push(`- ${meta.label} (${group.length}): ${headline}`);
     }
     lines.push("");
 
-    lines.push("TODAY'S ARTICLES");
-    for (const { item } of ranked) {
-      lines.push(`${item.title} — ${byline(item)}`);
-      lines.push(item.link);
-      if (item.summary) lines.push(item.summary.slice(0, 240));
+    lines.push("TOP STORIES");
+    const spotlight = ranked.slice(0, SPOTLIGHT_COUNT);
+    spotlight.forEach(({ item }, i) => {
+      const blurb = analysis?.storyBlurbs?.[String(i)]?.trim() || (item.summary ?? "").slice(0, 320);
+      lines.push(`${item.title} — ${byline(item)}`, item.link, blurb, "");
+    });
+
+    const rest = ranked.slice(SPOTLIGHT_COUNT);
+    if (rest.length > 0) {
+      lines.push("ALSO TODAY");
+      for (const { item } of rest) lines.push(`- ${item.title} — ${byline(item)} (${item.link})`);
       lines.push("");
     }
   }

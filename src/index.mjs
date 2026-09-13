@@ -19,7 +19,9 @@
 import { SOURCES } from "./sources.mjs";
 import { fetchAllSources } from "./fetchSources.mjs";
 import { scoreItem, isQualified } from "./rubric.mjs";
-import { hashItem, loadSeen, pruneAndSave } from "./state.mjs";
+import { hashItem, loadSeen, pruneAndSave, loadHistory, appendHistoryAndSave } from "./state.mjs";
+import { attachHeroImages } from "./images.mjs";
+import { generateAnalysis } from "./analysis.mjs";
 import { buildDigestHtml, buildDigestText } from "./render.mjs";
 import { sendDigest } from "./send.mjs";
 
@@ -53,11 +55,20 @@ async function main() {
 
   scoredItems.sort((a, b) => b.scored.total - a.scored.total);
   const rankedEntries = scoredItems.slice(0, MAX_ITEMS);
-  const ranked = rankedEntries.map(({ item, scored }) => ({ item, scored }));
+  let ranked = rankedEntries.map(({ item, scored }) => ({ item, scored }));
+
+  // Only the handful of stories that actually appear as full cards get a
+  // hero-image fetch — see images.mjs on why the rest don't need one.
+  ranked = await attachHeroImages(ranked);
+
+  const history = loadHistory();
+  const analysis = await generateAnalysis({ ranked, history });
+  if (analysis) console.log("Analysis generated via Claude.");
+  else if (process.env.ANTHROPIC_API_KEY) console.log("Analysis call failed or returned nothing usable; falling back to rule-based text.");
 
   const dateLabel = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Berlin", dateStyle: "full" }).format(now);
-  const html = buildDigestHtml({ dateLabel, ranked, health });
-  const text = buildDigestText({ dateLabel, ranked, health });
+  const html = buildDigestHtml({ dateLabel, ranked, health, analysis });
+  const text = buildDigestText({ dateLabel, ranked, health, analysis });
 
   if (dryRun) {
     console.log(text);
@@ -76,6 +87,7 @@ async function main() {
   // Only the items actually mailed are marked seen — one cut by MAX_ITEMS
   // today should still be eligible tomorrow, not silently dropped forever.
   pruneAndSave(seen, rankedEntries.map(({ hash }) => hash), now);
+  appendHistoryAndSave(history, rankedEntries, now);
 }
 
 main().catch((err) => {

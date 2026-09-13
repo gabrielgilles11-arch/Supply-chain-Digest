@@ -52,6 +52,8 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           RESEND_FROM: ${{ secrets.RESEND_FROM }}
           RESEND_TO: ${{ secrets.RESEND_TO }}
+          # Optional — see src/analysis.mjs. Unset means rule-based text, not a failure.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
           ARGS=()
@@ -59,12 +61,12 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS+=(--dry-run); fi
           node src/index.mjs "${ARGS[@]}"
 
-      - name: Commit updated dedup state
+      - name: Commit updated state
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/state/seen.json
+          git add src/state/seen.json src/state/history.json
           if git diff --cached --quiet; then
             echo "no change"
             exit 0

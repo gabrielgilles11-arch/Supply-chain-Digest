@@ -68,20 +68,18 @@ parsing live in `src/__tests__/`.
 
 ## The email (`src/render.mjs`)
 
-Themes first, articles second — no numeric score is shown anywhere. The
-rubric still decides what qualifies and in what order, but a reader wants
-"what's going on," not a spreadsheet:
+No numeric score is shown anywhere — the rubric still decides what qualifies
+and in what order, but a reader wants "what's going on," not a spreadsheet.
+Structure, top to bottom:
 
-1. **Key themes** — qualifying items are grouped into up to three buckets
-   (minerals only, friction only, both), and each gets a short auto-written
-   line: how many stories, which keywords are actually trending across them
-   this run (pulled straight from `rubric.mjs`'s own keyword lists, so it's
-   the same vocabulary that decided inclusion — not a separate guess), and
-   which story led the group, linked.
-2. **Today's articles** — the same items underneath as a plain reference
-   list: a small tag pill, the headline (linked), the real publisher when
-   one was extracted, a snippet, and an explicit **"Read the full story →"**
-   link.
+1. **Where this is heading** — one paragraph of outlook, plus a one-line
+   headline per non-empty theme (minerals / friction / both).
+2. **Top stories** — up to 4 items as full cards: a hero image when one was
+   found, the headline, the real publisher, a 2-3 sentence analyst blurb,
+   and an explicit **"Read the full story →"** link.
+3. **Also today** — anything past the top 4 as a compact one-line-each list,
+   so a busier day is still fully covered without turning into ten heavy
+   image cards.
 
 Dark header banner, warm off-white background instead of plain
 black-on-white. Still built as plain inline-styled HTML tables, not a modern
@@ -89,12 +87,32 @@ CSS layout: Outlook renders email with Word's layout engine, not a browser,
 so anything built with flexbox/grid, a `<style>` block, or a web font would
 silently break there. Every color and font is inline for that reason.
 
-The theme synthesis is deliberately rule-based rather than LLM-written — it
-reuses the exact keyword lists the rubric already scores against, so "what's
-trending" is traceable to the same logic that decided what qualified, not a
-second, unaccountable source of truth. An actual abstractive summary is a
-reasonable upgrade later, at the cost of an `ANTHROPIC_API_KEY` and a per-run
-cost; nothing here forecloses adding it on top.
+### The analysis layer (`src/analysis.mjs`) — optional, dormant by default
+
+The outlook paragraph, theme headlines, and per-story blurbs are written by
+a single daily Claude call when `ANTHROPIC_API_KEY` is set: real prose about
+where things are headed and why a story matters is not something a keyword
+rubric can produce, so this is the one part of the pipeline that isn't a
+plain rule. It's given today's qualifying stories *and* the last 7 days from
+`src/state/history.json`, and told explicitly not to invent a connection to
+that history that isn't really there.
+
+No key, or the call fails for any reason (timeout, bad response, rate
+limit): `generateAnalysis` returns `null` and every place in `render.mjs`
+that would show its output falls back to the original rule-based text
+(trending keywords, the raw summary, a plain item count) instead — the same
+"reinstating this is one line, not a rewrite" pattern the sibling Convi app
+uses for its own dormant paywall. A missing or broken API key must never
+mean a missing digest.
+
+### Hero images (`src/images.mjs`) — also best-effort
+
+For the (at most 4) stories that become full cards, the article page is
+fetched and its `og:image` (or `twitter:image`) is pulled out and embedded.
+A Google News link is a redirect, not the article itself, but a plain
+`fetch` follows it, so this almost always lands on the real page. No image
+tag, a timeout, or a fetch error just means that card renders without a
+picture — nothing here can fail the run.
 
 ## Scheduling and DST
 
@@ -107,10 +125,15 @@ sends; the other is a silent no-op. No yearly cron edit required.
 
 ```sh
 npm install
-npm test               # 20 tests over the rubric, feed parsing and the publisher filter
-npm run digest:dry     # fetches, scores, prints the digest — no secrets needed
+npm test               # 31 tests over the rubric, feed parsing, quality filter, images and analysis fallback
+npm run digest:dry     # fetches, scores, prints the digest — no Resend secrets needed
 npm run digest          # sends for real; needs the env vars below
 ```
+
+Note that `digest:dry` still runs real network calls — source fetches,
+image lookups, and (if `ANTHROPIC_API_KEY` is set) a real Claude call — it
+only skips the Resend send. Unset the key locally if you want a free,
+fully offline dry run.
 
 ## Required GitHub repo secrets
 
@@ -122,23 +145,30 @@ Set these under Settings → Secrets and variables → Actions:
   email address the Resend account itself is registered with.
 - `RESEND_TO` — where the digest goes.
 
+**Optional:** `ANTHROPIC_API_KEY` — turns on the outlook paragraph, theme
+headlines, and per-story analyst blurbs described above. Without it the
+digest still sends every day, just with the rule-based text it always had.
+
 ## Extending
 
-- **State**: `src/state/seen.json` is de-dup memory (14-day retention),
-  committed back by the workflow. Delete it to reset.
+- **State**: `src/state/seen.json` is de-dup memory (14-day retention).
+  `src/state/history.json` is a rolling log of what was actually mailed,
+  read by `analysis.mjs` for real week-over-week context. Both are
+  committed back by the workflow; delete either to reset it.
 - **Adding a source**: add an entry to `src/sources.mjs`. `type: "rss"` and
   `type: "google-news"` both handle RSS 2.0 and Atom (the latter also splits
   the Google News `"Title - Publisher"` suffix); `type: "federal-register"`
   expects the `documents.json` shape. Set `requiresTrustedPublisher: true`
   on any open (non-`site:`-restricted) Google News query.
-- **LLM summarization**: out of scope for now — the rubric alone decides
-  inclusion and ranking, no API key required. A "why this matters" sentence
-  per item could be layered on top later without changing what qualifies.
+- **Analysis prompt**: `buildPrompt` in `analysis.mjs` is the whole prompt —
+  it's deliberately one plain template string, not a framework, so it's easy
+  to read end to end and adjust the tone or the JSON shape it asks for.
 
 ## Stack
 
-Plain Node (ESM, no framework) · `fast-xml-parser` for RSS/Atom · Vitest ·
-GitHub Actions for scheduling · Resend for delivery.
+Plain Node (ESM, no framework) · `fast-xml-parser` for RSS/Atom · the Claude
+API directly via `fetch` (no SDK) for analysis · Vitest · GitHub Actions for
+scheduling · Resend for delivery.
 
 ## Licence
 
