@@ -68,16 +68,33 @@ parsing live in `src/__tests__/`.
 
 ## The email (`src/render.mjs`)
 
-Styled as a card per item — a score badge, a colored tag pill (🪨 minerals /
-⚖️ friction / both), the headline, a byline (the real publisher when one was
-extracted, the source name otherwise), a snippet, and an explicit **"Read the
-full story →"** link — on a dark header banner, over a warm off-white
-background instead of plain black-on-white.
+Themes first, articles second — no numeric score is shown anywhere. The
+rubric still decides what qualifies and in what order, but a reader wants
+"what's going on," not a spreadsheet:
 
-It's still built as plain inline-styled HTML tables, not a modern CSS layout:
-Outlook renders email with Word's layout engine, not a browser, so anything
-built with flexbox/grid, a `<style>` block, or a web font would silently
-break there. Every color and font is inline for that reason.
+1. **Key themes** — qualifying items are grouped into up to three buckets
+   (minerals only, friction only, both), and each gets a short auto-written
+   line: how many stories, which keywords are actually trending across them
+   this run (pulled straight from `rubric.mjs`'s own keyword lists, so it's
+   the same vocabulary that decided inclusion — not a separate guess), and
+   which story led the group, linked.
+2. **Today's articles** — the same items underneath as a plain reference
+   list: a small tag pill, the headline (linked), the real publisher when
+   one was extracted, a snippet, and an explicit **"Read the full story →"**
+   link.
+
+Dark header banner, warm off-white background instead of plain
+black-on-white. Still built as plain inline-styled HTML tables, not a modern
+CSS layout: Outlook renders email with Word's layout engine, not a browser,
+so anything built with flexbox/grid, a `<style>` block, or a web font would
+silently break there. Every color and font is inline for that reason.
+
+The theme synthesis is deliberately rule-based rather than LLM-written — it
+reuses the exact keyword lists the rubric already scores against, so "what's
+trending" is traceable to the same logic that decided what qualified, not a
+second, unaccountable source of truth. An actual abstractive summary is a
+reasonable upgrade later, at the cost of an `ANTHROPIC_API_KEY` and a per-run
+cost; nothing here forecloses adding it on top.
 
 ## Scheduling and DST
 

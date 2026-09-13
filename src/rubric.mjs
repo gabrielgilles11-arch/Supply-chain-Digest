@@ -19,7 +19,7 @@ function keywordScore(title, body, keywords, cap) {
   return Math.min(cap, hits);
 }
 
-const MINERAL_KEYWORDS = [
+export const MINERAL_KEYWORDS = [
   "critical mineral",
   "rare earth",
   "lithium",
@@ -39,7 +39,7 @@ const MINERAL_KEYWORDS = [
   "critical raw material",
 ];
 
-const FRICTION_KEYWORDS = [
+export const FRICTION_KEYWORDS = [
   "tariff",
   "export control",
   "export ban",
