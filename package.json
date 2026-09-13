@@ -1,0 +1,22 @@
+{
+  "name": "supply-chain-digest",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "digest": "node src/index.mjs",
+    "digest:dry": "node src/index.mjs --dry-run --force",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.11.1"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.0"
+  }
+}
