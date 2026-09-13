@@ -50,4 +50,18 @@ describe("scoreItem", () => {
     const scored = scoreItem(bothModerate, 3, NOW);
     expect(isQualified(scored)).toBe(true);
   });
+
+  it("rejects a fresh, high-magnitude friction headline with no mineral relevance", () => {
+    // This is the actual first-run failure: an EU-India tariff story with a
+    // euro figure and "quota" cleared total >= 6 on recency + magnitude +
+    // authority alone, with mineral relevance at zero.
+    const offBeat = item({
+      title: "EU-India trade deal promises €4b in tariff savings, still faces hurdles",
+      summary: "The deal sets a car import quota alongside the tariff cuts.",
+    });
+    const scored = scoreItem(offBeat, 2, NOW);
+    expect(scored.mineral).toBe(0);
+    expect(scored.total).toBeGreaterThanOrEqual(6);
+    expect(isQualified(scored)).toBe(false);
+  });
 });

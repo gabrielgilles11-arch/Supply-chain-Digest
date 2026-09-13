@@ -86,7 +86,7 @@ function magnitudeScore(text) {
 
 /**
  * Scores one item. `sourceAuthority` (0-3) comes from the source definition:
- * 3 official/regulatory, 2 think tank, 1 general-news proxy.
+ * see sources.mjs.
  */
 export function scoreItem(item, sourceAuthority, now = new Date()) {
   const title = item.title ?? "";
@@ -108,11 +108,13 @@ export function scoreItem(item, sourceAuthority, now = new Date()) {
 }
 
 /**
- * A strong signal on either half of the beat qualifies alone; two moderate
- * signals together also do. Keeps the digest from either axis crowding out
- * the other, or from admitting something that just happens to score well on
- * source authority and recency with no real content match.
+ * A strong signal on either half of the beat qualifies alone. Two moderate
+ * signals qualify together too, but only when both axes actually contribute
+ * — the first production run let a fresh, dollar-figure EU-India tariff
+ * story through on authority + recency + magnitude alone, with zero mineral
+ * relevance, because total >= 6 didn't require either axis to be present.
  */
 export function isQualified(scored) {
-  return scored.mineral >= 3 || scored.friction >= 3 || scored.total >= 6;
+  if (scored.mineral >= 3 || scored.friction >= 3) return true;
+  return scored.mineral >= 1 && scored.friction >= 1 && scored.total >= 6;
 }

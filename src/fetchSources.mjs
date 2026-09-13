@@ -8,6 +8,7 @@
  * sources responded" rather than never arriving at all.
  */
 import { XMLParser } from "fast-xml-parser";
+import { splitGoogleNewsTitle, isTrustedPublisher } from "./quality.mjs";
 
 const TIMEOUT_MS = 15_000;
 const USER_AGENT = "Convi-Supply-Chain-Digest/1.0 (+https://tryconvi.com)";
@@ -74,6 +75,18 @@ async function fetchOneSource(source) {
   return parseFeed(await res.text());
 }
 
+/**
+ * Google News prefixes every title with "Headline - Publisher". Splitting
+ * that out gives a clean headline to display and, for the two open-search
+ * sources, something to check against the trusted-publisher allowlist —
+ * without it a content-farm reprint scores identically to a wire story.
+ */
+export function processGoogleNewsItem(entry, source) {
+  const { title, publisher } = splitGoogleNewsTitle(entry.title);
+  if (source.requiresTrustedPublisher && !isTrustedPublisher(publisher)) return null;
+  return { ...entry, title, publisher };
+}
+
 /** Returns { items, health } — health lists which sources succeeded and how many items each returned. */
 export async function fetchAllSources(sources) {
   const items = [];
@@ -83,11 +96,17 @@ export async function fetchAllSources(sources) {
     sources.map(async (source) => {
       try {
         const raw = await fetchOneSource(source);
-        for (const entry of raw) {
+        let kept = 0;
+        for (let entry of raw) {
           if (!entry.title || !entry.link) continue;
+          if (source.type === "google-news") {
+            entry = processGoogleNewsItem(entry, source);
+            if (!entry) continue;
+          }
           items.push({ ...entry, sourceId: source.id, sourceName: source.name, authority: source.authority });
+          kept++;
         }
-        health.push({ id: source.id, name: source.name, ok: true, count: raw.length });
+        health.push({ id: source.id, name: source.name, ok: true, count: kept, filtered: raw.length - kept });
       } catch (err) {
         health.push({ id: source.id, name: source.name, ok: false, error: err.message });
       }

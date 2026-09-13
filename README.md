@@ -17,16 +17,28 @@ rubric that can be stated and defended rather than a black box.
 | :--- | :--- | :--- |
 | Federal Register — critical minerals | official API | 3 |
 | Federal Register — defense procurement | official API | 3 |
-| CSIS — analysis | RSS | 2 |
-| GZERO Media (Eurasia Group) | RSS | 2 |
-| China customs data | Google News proxy | 1 |
-| EU Commission trade & minerals | Google News proxy | 1 |
+| CSIS | Google News, `site:csis.org` | 2 |
+| GZERO / Eurasia Group | Google News, `site:gzeromedia.com OR site:eurasiagroup.net` | 2 |
+| China customs data | Google News, open search + publisher filter | 2 |
+| EU trade & minerals | Google News, open search + publisher filter | 2 |
 
-China's customs releases and the EU Commission's press corner don't publish a
-feed stable enough to hardcode, so those two are covered by targeted Google
-News queries instead of a native feed. A source going stale doesn't take the
-run down — `fetchSources.mjs` catches each one independently, and the digest
-prints a health line naming what failed.
+Everything past the Federal Register goes through Google News rather than a
+hand-picked RSS URL. The first version pointed straight at
+`csis.org/analysis/rss.xml` and `gzeromedia.com/feed`, and both had moved —
+404 in production despite looking valid beforehand. `site:` search doesn't
+have that failure mode: it can return zero results, never a dead link.
+
+The two fully open queries (China customs, EU trade) don't have a `site:`
+restriction, so `requiresTrustedPublisher` in `sources.mjs` runs their
+results through `quality.mjs`: Google News tags every headline
+`"Title - Publisher"`, and only a header on the allowlist (Reuters,
+Bloomberg, the FT, Politico, Nikkei, SCMP, and similar) survives. The first
+production run shipped a story from `illustrateddailynews.com` because
+nothing was checking who wrote it — this is that fix.
+
+A source going stale (a query returning nothing, a timeout) still doesn't
+take the run down — `fetchSources.mjs` catches each one independently, and
+the digest's footer shows a health pill per source.
 
 ## The rubric (`src/rubric.mjs`)
 
@@ -37,20 +49,35 @@ recited and defended rather than trusted as a black box:
 | :--- | :--- | :--- |
 | Mineral relevance | 0–4 | Critical-minerals keyword hits (title weighted 2x, body 1x) |
 | Friction relevance | 0–4 | Transatlantic-friction keyword hits, same weighting |
-| Source authority | 0–3 | Official (3) / think tank (2) / news proxy (1), from `sources.mjs` |
+| Source authority | 0–3 | Official (3) / think tank or trusted-publisher-filtered news (2), from `sources.mjs` |
 | Recency | 0–2 | 2 within 24h, 1 within 72h, 0 beyond |
 | Magnitude | 0–2 | A hard number or a ban/restriction verb (2), a soft "considering" (1), neither (0) |
 
-**Qualifies for the digest** when `mineral >= 3` OR `friction >= 3` OR
-`total >= 6` — a strong signal on either half of the beat is enough alone;
-two moderate signals together also clear the bar. Keeps the two halves of the
-beat from crowding each other out, and keeps source authority + recency alone
-from admitting something with no real content match.
+**Qualifies for the digest** when `mineral >= 3` OR `friction >= 3` — a
+strong signal on either half of the beat is enough alone. Two moderate
+signals qualify together too, but only `if mineral >= 1 AND friction >= 1 AND
+total >= 6`: the first production run let a fresh, dollar-figure **EU–India**
+tariff story through purely on recency + magnitude + authority, with zero
+mineral relevance, because the old `total >= 6` route didn't require either
+axis to actually be present. Both axes now have to contribute something.
 
 Qualifying items are ranked by total score, the top 12 are mailed, and only
 those are marked "seen" — one bumped by the cap today is still eligible
 tomorrow rather than silently dropped. Tests for the rubric and the feed
 parsing live in `src/__tests__/`.
+
+## The email (`src/render.mjs`)
+
+Styled as a card per item — a score badge, a colored tag pill (🪨 minerals /
+⚖️ friction / both), the headline, a byline (the real publisher when one was
+extracted, the source name otherwise), a snippet, and an explicit **"Read the
+full story →"** link — on a dark header banner, over a warm off-white
+background instead of plain black-on-white.
+
+It's still built as plain inline-styled HTML tables, not a modern CSS layout:
+Outlook renders email with Word's layout engine, not a browser, so anything
+built with flexbox/grid, a `<style>` block, or a web font would silently
+break there. Every color and font is inline for that reason.
 
 ## Scheduling and DST
 
@@ -63,7 +90,7 @@ sends; the other is a silent no-op. No yearly cron edit required.
 
 ```sh
 npm install
-npm test               # 10 tests over the rubric and feed parsing
+npm test               # 20 tests over the rubric, feed parsing and the publisher filter
 npm run digest:dry     # fetches, scores, prints the digest — no secrets needed
 npm run digest          # sends for real; needs the env vars below
 ```
@@ -82,9 +109,11 @@ Set these under Settings → Secrets and variables → Actions:
 
 - **State**: `src/state/seen.json` is de-dup memory (14-day retention),
   committed back by the workflow. Delete it to reset.
-- **Adding a source**: add an entry to `src/sources.mjs`; `type: "rss"`
-  handles both RSS 2.0 and Atom, `type: "federal-register"` expects the
-  `documents.json` shape.
+- **Adding a source**: add an entry to `src/sources.mjs`. `type: "rss"` and
+  `type: "google-news"` both handle RSS 2.0 and Atom (the latter also splits
+  the Google News `"Title - Publisher"` suffix); `type: "federal-register"`
+  expects the `documents.json` shape. Set `requiresTrustedPublisher: true`
+  on any open (non-`site:`-restricted) Google News query.
 - **LLM summarization**: out of scope for now — the rubric alone decides
   inclusion and ranking, no API key required. A "why this matters" sentence
   per item could be layered on top later without changing what qualifies.

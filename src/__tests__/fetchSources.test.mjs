@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseFeed, parseFederalRegister } from "../fetchSources.mjs";
+import { parseFeed, parseFederalRegister, processGoogleNewsItem } from "../fetchSources.mjs";
 
 const RSS_SAMPLE = `<?xml version="1.0"?>
 <rss version="2.0"><channel>
@@ -64,5 +64,28 @@ describe("parseFederalRegister", () => {
 
   it("handles a response with no results", () => {
     expect(parseFederalRegister({})).toEqual([]);
+  });
+});
+
+describe("processGoogleNewsItem", () => {
+  it("cleans the title and passes through a trusted publisher", () => {
+    const result = processGoogleNewsItem(
+      { title: "China curbs rare earth exports - Reuters", link: "https://example.com/a" },
+      { requiresTrustedPublisher: true },
+    );
+    expect(result).toMatchObject({ title: "China curbs rare earth exports", publisher: "Reuters" });
+  });
+
+  it("drops an item from an untrusted publisher when the source requires one", () => {
+    const result = processGoogleNewsItem(
+      { title: "Some tariff story - illustrateddailynews.com", link: "https://example.com/b" },
+      { requiresTrustedPublisher: true },
+    );
+    expect(result).toBeNull();
+  });
+
+  it("keeps an unrecognized publisher when the source doesn't require trust (site-restricted queries)", () => {
+    const result = processGoogleNewsItem({ title: "A CSIS piece - CSIS", link: "https://example.com/c" }, {});
+    expect(result).not.toBeNull();
   });
 });
